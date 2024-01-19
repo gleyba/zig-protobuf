@@ -1,0 +1,10 @@
+syntax = "proto3";
+
+package examples.proto;
+
+import "proto/thing.proto";
+
+message Place {
+    string name = 1;
+    examples.proto.Thing thing = 2;
+}

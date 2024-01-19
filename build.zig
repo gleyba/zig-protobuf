@@ -7,7 +7,7 @@ const mem = std.mem;
 
 const PROTOC_VERSION = "23.4";
 
-pub fn build(b: *std.build.Builder) !void {
+pub fn build(b: *std.Build) !void {
     // Standard target options allows the person running `zig build` to choose
     // what target to build for. Here we do not override the defaults, which
     // means any target is allowed, and the default is native. Other options
@@ -34,7 +34,7 @@ pub fn build(b: *std.build.Builder) !void {
     b.installArtifact(lib);
 
     const module = b.addModule("protobuf", .{
-        .source_file = .{ .path = "src/protobuf.zig" },
+        .root_source_file = .{ .path = "src/protobuf.zig" },
     });
 
     const exe = buildGenerator(b, .{
@@ -49,7 +49,7 @@ pub fn build(b: *std.build.Builder) !void {
 
     const test_step = b.step("test", "Run library tests");
 
-    const tests = [_]*std.build.LibExeObjStep{
+    const tests = [_]*std.Build.Step.Compile  {
         b.addTest(.{
             .name = "protobuf",
             .root_source_file = .{ .path = "src/protobuf.zig" },
@@ -98,16 +98,20 @@ pub fn build(b: *std.build.Builder) !void {
         .destination_directory = .{ .path = "tests/.generated" },
         .source_files = &.{"tests/protos_for_test/generated_in_ci.proto"},
         .include_directories = &.{"tests/protos_for_test"},
+        .target = target,
+        .optimize = optimize,
     });
 
     const convertStep2 = RunProtocStep.create(b, b, .{
         .destination_directory = .{ .path = "tests/generated" },
         .source_files = &.{ "tests/protos_for_test/all.proto", "tests/protos_for_test/whitespace-in-name.proto" },
         .include_directories = &.{"tests/protos_for_test"},
+        .target = target,
+        .optimize = optimize,
     });
 
     for (tests) |test_item| {
-        test_item.addModule("protobuf", module);
+        test_item.root_module.addImport("protobuf", module);
 
         // This creates a build step. It will be visible in the `zig build --help` menu,
         // and can be selected like this: `zig build test`
@@ -131,17 +135,38 @@ pub fn build(b: *std.build.Builder) !void {
             b.pathJoin(&.{ wd, "include/google/protobuf/descriptor.proto" }),
         },
         .include_directories = &.{},
+        .target = target,
+        .optimize = optimize,
     });
 
     bootstrap.dependOn(&bootstrapConversion.step);
+
+
+    const gen_sample = b.step("gen-sample", "generates smaple");
+    const gen_sample_protoc_step = RunProtocStep.create(b, b, .{
+        .destination_directory = .{
+            .path = "example/out",
+        },
+        .source_files = &.{
+            "example/proto/person.proto",
+            "example/proto/place.proto",
+            "example/proto/thing.proto",
+        },
+        .include_directories = &.{
+            "example",
+        },
+        .target = target,
+        .optimize = optimize,
+    });
+    gen_sample.dependOn(&gen_sample_protoc_step.step);
 }
 
 pub const RunProtocStep = struct {
     step: Step,
     source_files: []const []const u8,
     include_directories: []const []const u8,
-    destination_directory: std.build.FileSource,
-    generator: *std.build.Step.Compile,
+    destination_directory: std.Build.LazyPath,
+    generator: *std.Build.Step.Compile,
     verbose: bool = false, // useful for debugging if you need to know what protoc command is sent
 
     pub const base_id = .protoc;
@@ -149,7 +174,9 @@ pub const RunProtocStep = struct {
     pub const Options = struct {
         source_files: []const []const u8,
         include_directories: []const []const u8 = &.{},
-        destination_directory: std.build.FileSource,
+        destination_directory: std.Build.LazyPath,
+        target: std.Build.ResolvedTarget,
+        optimize: std.builtin.OptimizeMode,
     };
 
     pub const StepErr = error{
@@ -172,7 +199,10 @@ pub const RunProtocStep = struct {
             .source_files = owner.dupeStrings(options.source_files),
             .include_directories = owner.dupeStrings(options.include_directories),
             .destination_directory = options.destination_directory.dupe(owner),
-            .generator = buildGenerator(dependency_builder, .{}),
+            .generator = buildGenerator(dependency_builder, .{
+                .target = options.target,
+                .optimize = options.optimize,
+            }),
         };
 
         self.step.dependOn(&self.generator.step);
@@ -239,11 +269,11 @@ pub const RunProtocStep = struct {
 };
 
 pub const GenOptions = struct {
-    target: std.zig.CrossTarget = .{},
+    target: std.Build.ResolvedTarget,
     optimize: std.builtin.OptimizeMode = .Debug,
 };
 
-pub fn buildGenerator(b: *std.build.Builder, opt: GenOptions) *std.build.Step.Compile {
+pub fn buildGenerator(b: *std.Build, opt: GenOptions) *std.Build.Step.Compile {
     const exe = b.addExecutable(.{
         .name = "protoc-gen-zig",
         // In this case the main source file is merely a path, however, in more
@@ -254,10 +284,10 @@ pub fn buildGenerator(b: *std.build.Builder, opt: GenOptions) *std.build.Step.Co
     });
 
     const module = b.addModule("protobuf", .{
-        .source_file = .{ .path = "src/protobuf.zig" },
+        .root_source_file = .{ .path = "src/protobuf.zig" },
     });
 
-    exe.addModule("protobuf", module);
+    exe.root_module.addImport("protobuf", module);
 
     b.installArtifact(exe);
 
